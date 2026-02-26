@@ -1,0 +1,22 @@
+{
+  "name": "brimdex-settlement-bot",
+  "version": "1.0.0",
+  "description": "Brimdex Market Settlement Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "settle": "hardhat run --network somniaTestnet settle-markets.cjs"
+  },
+  "dependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^3.0.0",
+    "@somnia-chain/reactivity": "^0.1.9",
+    "@supabase/supabase-js": "^2.97.0",
+    "dotenv": "^17.2.3",
+    "ethers": "^6.4.0",
+    "hardhat": "^2.22.3",
+    "viem": "^2.37.8"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
