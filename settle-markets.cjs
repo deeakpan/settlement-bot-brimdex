@@ -11,7 +11,7 @@ const { loadMarkets, saveMarkets, deleteMarket, loadSubscriptionId, saveSubscrip
  * 
  * How it works:
  * 1. Subscribes to MarketCreated events (free off-chain) to track new markets
- * 2. Polls every 5 minutes: checks stored expiry timestamps against system time
+ * 2. Polls every 4 seconds: checks stored expiry timestamps against system time
  * 3. When market expires, calls settle() which fetches price from on-chain oracle (BrimdexFeeds)
  * 
  * Usage:
@@ -69,7 +69,7 @@ async function main() {
   console.log(`📋 Factory Address: ${factoryAddress}`);
   console.log(`🌐 Network: ${network}`);
   console.log(`🔮 Oracle: On-chain (BrimdexFeeds contract)`);
-  console.log(`⏱️  Polling Interval: 5 minutes\n`);
+  console.log(`⏱️  Polling Interval: 4 seconds\n`);
 
   // Get factory contract
   const factoryABI = [
@@ -429,9 +429,9 @@ async function main() {
   }
 
   // Check expiry periodically (only for markets already in storage)
-  console.log("⏱️  Starting expiry checker (every 5 minutes)...\n");
+  console.log("⏱️  Starting expiry checker (every 4 seconds)...\n");
   
-  const POLL_INTERVAL = 300000; // 5 minutes
+  const POLL_INTERVAL = 4000; // 4 seconds
   let pollInterval = setInterval(async () => {
     try {
       const currentTime = Math.floor(Date.now() / 1000);
@@ -468,7 +468,7 @@ async function main() {
 
   console.log("✅ Bot running!");
   console.log("   - MarketCreated events: Real-time (push-based subscription)");
-  console.log("   - Expiry checks: Every 5 minutes (for markets in storage)");
+  console.log("   - Expiry checks: Every 4 seconds (for markets in storage)");
   console.log("   - No polling for new markets - subscription only");
   console.log("   Press Ctrl+C to stop\n");
 
