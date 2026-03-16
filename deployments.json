@@ -1,8 +1,8 @@
 {
   "somniaTestnet": {
-    "factory": "0x6C606dD104a4ed60Af393904277526116232319f",
-    "bootstrapVault": "0xEea0882A28D926810014F4411D8b3CaEd2Ceb576",
-    "orderBook": "0xC80cC2Ea89eCC283352b9E8d92743a8c993aa5b2",
+    "factory": "0xfa6C89De500B260353a1778A8Db7a2c7460D744C",
+    "bootstrapVault": "0x24f34E63F5f7515E39CaefEeDF22Fc12Efff8d3C",
+    "orderBook": "0x36C8E4DDd3D31CA94a103bd406481B034cA62d0f",
     "usdc": "0x4b6E2382570b840d3B5E52B042E2F9d5dB23d3fE",
     "feeds": "0xe24cB9468a690E33dDbC365BD29F8E1B53e48F93"
   }
