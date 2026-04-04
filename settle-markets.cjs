@@ -1,23 +1,26 @@
 const hre = require("hardhat");
-const { ethers } = require("hardhat");
+const { Contract, JsonRpcProvider, Wallet } = require("ethers");
 const fs = require("fs");
 const path = require("path");
 const viem = require("viem");
 const { SDK } = require("@somnia-chain/reactivity");
-const { loadMarkets, saveMarkets, deleteMarket, loadSubscriptionId, saveSubscriptionId, clearSubscriptionId } = require("./lib/supabase-markets.cjs");
+const { loadMarkets, saveMarkets, loadSubscriptionId, saveSubscriptionId, clearSubscriptionId } = require("./lib/supabase-markets.cjs");
 
 /**
  * Settlement Bot - Automatically settles expired markets
- * 
+ *
  * How it works:
  * 1. Subscribes to MarketCreated events (free off-chain) to track new markets
  * 2. Polls every 4 seconds: checks stored expiry timestamps against system time
  * 3. When market expires, calls settle() which fetches price from on-chain oracle (BrimdexFeeds)
- * 
- * Usage:
+ *
+ * Usage (recommended):
  *   npx hardhat run settle-markets.cjs --network somniaTestnet
- * 
- * Note: settle() now fetches price from on-chain oracle automatically - no off-chain price fetching needed
+ *
+ * Or with plain Node (does NOT use Hardhat --network; you must set RPC + key):
+ *   NETWORK=somniaTestnet DEPLOYER_PRIVATE_KEY=0x... node settle-markets.cjs
+ *
+ * Note: settle() fetches price from on-chain oracle (BrimdexFeeds).
  */
 
 async function main() {
@@ -57,7 +60,8 @@ async function main() {
     throw new Error(
       `No deployments found for network: ${network}\n` +
       `Available networks: ${availableNetworks || "none"}\n` +
-      `\n💡 Set FACTORY_ADDRESS environment variable or provide deployments.json`
+      `\n💡 Run with: npx hardhat run settle-markets.cjs --network somniaTestnet\n` +
+      `   Or set NETWORK env var: NETWORK=somniaTestnet node settle-markets.cjs`
     );
   }
 
@@ -70,6 +74,38 @@ async function main() {
   console.log(`🌐 Network: ${network}`);
   console.log(`🔮 Oracle: On-chain (BrimdexFeeds contract)`);
   console.log(`⏱️  Polling Interval: 4 seconds\n`);
+
+  /**
+   * `node settle-markets.cjs` leaves Hardhat on the in-process "hardhat" chain, so
+   * ethers.getSigners() targets local Hardhat and eth_call to Somnia addresses returns 0x.
+   * Always use Somnia JSON-RPC + DEPLOYER_PRIVATE_KEY for this bot.
+   */
+  const settlementRpcUrl =
+    network === "somniaTestnet"
+      ? process.env.SOMNIA_TESTNET_RPC_URL || "https://api.infra.testnet.somnia.network"
+      : typeof hre.config?.networks?.[network]?.url === "string"
+        ? hre.config.networks[network].url
+        : process.env.SOMNIA_TESTNET_RPC_URL || "https://api.infra.testnet.somnia.network";
+
+  const settlementChainId =
+    network === "somniaTestnet" ? 50312 : hre.config?.networks?.[network]?.chainId;
+
+  const settlementProvider = new JsonRpcProvider(
+    settlementRpcUrl,
+    settlementChainId != null ? { chainId: settlementChainId, name: network } : undefined
+  );
+
+  const rawPk = process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY;
+  if (!rawPk) {
+    throw new Error(
+      "Set DEPLOYER_PRIVATE_KEY (or PRIVATE_KEY) in .env.\n\n" +
+        "Running `node settle-markets.cjs` does not use Hardhat's --network; without a key the script " +
+        "would talk to the local hardhat chain and getAllMarkets() fails with BAD_DATA (empty 0x).\n\n" +
+        "Or run: npx hardhat run settle-markets.cjs --network somniaTestnet"
+    );
+  }
+  const pk = rawPk.startsWith("0x") ? rawPk : `0x${rawPk}`;
+  const signer = new Wallet(pk, settlementProvider);
 
   // Get factory contract
   const factoryABI = [
@@ -94,9 +130,9 @@ async function main() {
       ]
     }
   ];
-  
-  const factory = await ethers.getContractAt(factoryABI, factoryAddress);
-  
+
+  const factory = new Contract(factoryAddress, factoryABI, signer);
+
   // Get market contract ABI
   const marketABI = [
     "function marketConfig() external view returns (string name, string feedName, uint256 lowerBound, uint256 upperBound, uint256 expiryTimestamp, uint256 creationTimestamp, uint256 startPrice, bool initialized, bool settled)",
@@ -104,16 +140,20 @@ async function main() {
     "event MarketSettled(bool boundWins, uint256 totalPool, uint256 winnings, uint256 resolvedPrice)"
   ];
 
-  const [signer] = await ethers.getSigners();
-  const provider = signer.provider || await ethers.getDefaultProvider();
-  
+  console.log(`🔗 Settlement RPC: ${settlementRpcUrl}`);
   console.log(`👤 Settling as: ${signer.address}\n`);
 
-  // Use Somnia infra testnet endpoints
-  const rpcUrl = process.env.SOMNIA_TESTNET_RPC_URL || "https://api.infra.testnet.somnia.network";
-  const wsUrl = process.env.SOMNIA_TESTNET_WS_URL || "wss://api.infra.testnet.somnia.network/ws";
+  const rpcUrl = settlementRpcUrl;
+  const wsUrl =
+    process.env.SOMNIA_TESTNET_WS_URL ||
+    (rpcUrl.startsWith("https://")
+      ? "wss://" + rpcUrl.slice("https://".length).replace(/\/$/, "") + "/ws"
+      : rpcUrl.startsWith("http://")
+        ? "ws://" + rpcUrl.slice("http://".length).replace(/\/$/, "") + "/ws"
+        : "wss://api.infra.testnet.somnia.network/ws");
 
   function toWebSocketUrl(httpUrl) {
+    // Somnia reactivity subscribe requires a WS transport; public WS often uses `/ws`.
     if (!httpUrl) throw new Error("Missing RPC URL");
     if (httpUrl.startsWith("ws://") || httpUrl.startsWith("wss://")) return httpUrl;
     const ws = httpUrl.startsWith("https://")
@@ -163,28 +203,75 @@ async function main() {
   
   // Get all markets from factory to verify which ones are valid
   console.log(`\n📊 Fetching all markets from factory contract...`);
-  const allFactoryMarkets = await factory.getAllMarkets();
+  let allFactoryMarkets = [];
+  try {
+    allFactoryMarkets = await factory.getAllMarkets();
+  } catch (e) {
+    console.warn(`   ⚠️  getAllMarkets failed: ${e.message || e}`);
+    console.warn(`   Skipping storage prune (keeping tracked markets). Check RPC / factory address.\n`);
+  }
   console.log(`   Found ${allFactoryMarkets.length} market(s) in factory`);
   if (allFactoryMarkets.length > 0) {
-    console.log(`   Factory markets: ${allFactoryMarkets.map(m => m.toLowerCase()).join(", ")}`);
+    console.log(`   Factory markets: ${allFactoryMarkets.map((m) => m.toLowerCase()).join(", ")}`);
   }
-  
-  const validMarketAddresses = new Set(allFactoryMarkets.map(addr => addr.toLowerCase()));
-  
-  // Remove old markets from storage that aren't in the factory
-  let removedCount = 0;
-  for (const marketAddress of Object.keys(marketsToSettle)) {
-    if (!validMarketAddresses.has(marketAddress.toLowerCase())) {
-      console.log(`   ⚠️  Removing old market from storage (not in factory): ${marketAddress}`);
-      delete marketsToSettle[marketAddress];
-      removedCount++;
+
+  const validMarketAddresses = new Set(allFactoryMarkets.map((addr) => addr.toLowerCase()));
+
+  // Remove old markets from storage that aren't in the factory (only if we got a list)
+  if (allFactoryMarkets.length > 0 || validMarketAddresses.size > 0) {
+    let removedCount = 0;
+    for (const marketAddress of Object.keys(marketsToSettle)) {
+      if (!validMarketAddresses.has(marketAddress.toLowerCase())) {
+        console.log(`   ⚠️  Removing old market from storage (not in factory): ${marketAddress}`);
+        delete marketsToSettle[marketAddress];
+        removedCount++;
+      }
+    }
+    if (removedCount > 0) {
+      await saveMarkets(marketsToSettle);
+      console.log(`   ✅ Removed ${removedCount} old market(s) from storage\n`);
+    } else {
+      console.log(`   ✅ All markets in storage are valid\n`);
     }
   }
-  if (removedCount > 0) {
-    await saveMarkets(marketsToSettle);
-    console.log(`   ✅ Removed ${removedCount} old market(s) from storage\n`);
-  } else {
-    console.log(`   ✅ All markets in storage are valid\n`);
+
+  // Markets already on-chain are never pushed via MarketCreated if the bot missed the event.
+  // Seed storage from factory list so Supabase / local tracking stays in sync.
+  if (allFactoryMarkets.length > 0) {
+    let seeded = 0;
+    for (const addr of allFactoryMarkets) {
+      const lower = String(addr).toLowerCase();
+      if (marketsToSettle[lower]) continue;
+      try {
+        const m = new Contract(addr, marketABI, signer);
+        const config = await m.marketConfig();
+        const initialized = config[7];
+        const settled = config[8];
+        const expiryTimestamp = config[4];
+        const assetName = config[0];
+        if (!initialized) {
+          console.log(`   ⏭️  Skip seed (not initialized): ${lower}`);
+          continue;
+        }
+        if (settled) {
+          console.log(`   ⏭️  Skip seed (already settled): ${lower}`);
+          continue;
+        }
+        const exp = Number(expiryTimestamp);
+        marketsToSettle[lower] = {
+          expiry: exp,
+          assetName: String(assetName || ""),
+          timeLeft: exp - Math.floor(Date.now() / 1000),
+        };
+        seeded++;
+      } catch (e) {
+        console.warn(`   ⚠️  Could not seed market ${addr}: ${e.message || e}`);
+      }
+    }
+    if (seeded > 0) {
+      await saveMarkets(marketsToSettle);
+      console.log(`   📥 Seeded ${seeded} on-chain market(s) into storage (Supabase)\n`);
+    }
   }
 
   // Function to check and settle a market
@@ -194,7 +281,7 @@ async function main() {
       let market, config, initialized, settled, expiryTimestamp, assetName;
       
       try {
-        market = await ethers.getContractAt(marketABI, marketAddress);
+        market = new Contract(marketAddress, marketABI, signer);
         config = await market.marketConfig();
         
         // Parse config tuple (now has feedName as second element)
@@ -241,7 +328,7 @@ async function main() {
           throw new Error(`Invalid asset name: ${assetName}`);
         }
 
-        const marketContract = await ethers.getContractAt(marketABI, marketAddress);
+        const marketContract = new Contract(marketAddress, marketABI, signer);
         
         console.log(`   🌐 Contract will fetch price from on-chain oracle (BrimdexFeeds)...`);
         console.log(`   👤 Settling as: ${signer.address} (anyone can settle)`);
@@ -313,7 +400,7 @@ async function main() {
       const precompileABI = [
         "function unsubscribe(uint256 subscriptionId) external"
       ];
-      const precompile = await ethers.getContractAt(precompileABI, SOMNIA_REACTIVITY_PRECOMPILE);
+      const precompile = new Contract(SOMNIA_REACTIVITY_PRECOMPILE, precompileABI, signer);
       const tx = await precompile.unsubscribe(existingSubscriptionId);
       await tx.wait();
       console.log(`   ✅ Unsubscribed from old subscription\n`);
@@ -499,7 +586,7 @@ async function main() {
           try {
             const SOMNIA_REACTIVITY_PRECOMPILE = "0x0000000000000000000000000000000000000400";
             const precompileABI = ["function unsubscribe(uint256 subscriptionId) external"];
-            const precompile = await ethers.getContractAt(precompileABI, SOMNIA_REACTIVITY_PRECOMPILE);
+            const precompile = new Contract(SOMNIA_REACTIVITY_PRECOMPILE, precompileABI, signer);
             const tx = await precompile.unsubscribe(storedId);
             await tx.wait();
             console.log(`   ✅ Unsubscribed using stored ID: ${storedId}`);
