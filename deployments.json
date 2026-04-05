@@ -1,9 +1,16 @@
 {
   "somniaTestnet": {
-    "factory": "0xfa6C89De500B260353a1778A8Db7a2c7460D744C",
-    "bootstrapVault": "0x24f34E63F5f7515E39CaefEeDF22Fc12Efff8d3C",
-    "orderBook": "0x36C8E4DDd3D31CA94a103bd406481B034cA62d0f",
+    "network": "somniaTestnet",
+    "deployer": "0x68ac96Ce64D62386b1A5E2DFf8f0F01fEEd46E09",
     "usdc": "0x4b6E2382570b840d3B5E52B042E2F9d5dB23d3fE",
-    "feeds": "0xe24cB9468a690E33dDbC365BD29F8E1B53e48F93"
+    "feeds": "0xe24cB9468a690E33dDbC365BD29F8E1B53e48F93",
+    "bootstrapVault": "0x1cf4D54b5D9BE7Be789282F7039D669df46c3Bfc",
+    "factory": "0xB5afEBA468353D9c341cC9754EBFcd08ea850E99",
+    "orderBook": "0x03a25Feb4535C83D310217487388F220804B59d6",
+    "router": "0xD085D670B884e0888e6729986265f35641c0CfA6",
+    "libraries": {
+      "OrderBookLinkedList": "0x91Ca1b22F02806B2a87F5651AdeDCde356803C69"
+    },
+    "timestamp": "2026-03-27T22:21:54.184Z"
   }
 }
