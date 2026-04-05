@@ -1,7 +1,10 @@
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+
 const hre = require("hardhat");
 const { Contract, JsonRpcProvider, Wallet } = require("ethers");
 const fs = require("fs");
-const path = require("path");
 const viem = require("viem");
 const { SDK } = require("@somnia-chain/reactivity");
 const { loadMarkets, saveMarkets, loadSubscriptionId, saveSubscriptionId, clearSubscriptionId } = require("./lib/supabase-markets.cjs");

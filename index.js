@@ -5,9 +5,12 @@
  * Runs the settlement bot continuously
  */
 
-require("dotenv").config();
-const { exec } = require("child_process");
 const path = require("path");
+const { spawn } = require("child_process");
+
+process.chdir(__dirname);
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 console.log("🚀 Starting Brimdex Settlement Bot...");
 console.log("📋 Environment check:");
@@ -16,26 +19,27 @@ console.log(`   - SUPABASE_URL: ${process.env.SUPABASE_URL || process.env.NEXT_P
 console.log(`   - SUPABASE_SERVICE_ROLE_KEY: ${process.env.SUPABASE_SERVICE_ROLE_KEY ? "✅ Set" : "❌ Missing"}`);
 console.log("");
 
-// Make sure we're in the right directory
-process.chdir(__dirname);
+const missingRailwayHint =
+  !process.env.DEPLOYER_PRIVATE_KEY ||
+  !(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL) ||
+  !process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (missingRailwayHint) {
+  console.log(
+    "ℹ️  Host platforms (e.g. Railway) inject secrets into process.env per service. If these show Missing but you set variables in the dashboard, confirm they are attached to this same deployment (not only another service like the web app), names match exactly, then redeploy.\n"
+  );
+}
 
 // Run the settle script
 const settleScript = path.join(__dirname, "settle-markets.cjs");
-const command = `npx hardhat run --network somniaTestnet ${settleScript}`;
+const args = ["hardhat", "run", "--network", "somniaTestnet", settleScript];
 
 console.log("🤖 Starting settlement bot...\n");
 
-const child = exec(command, {
+const child = spawn("npx", args, {
   cwd: __dirname,
   env: process.env,
-});
-
-child.stdout.on("data", (data) => {
-  process.stdout.write(data);
-});
-
-child.stderr.on("data", (data) => {
-  process.stderr.write(data);
+  stdio: "inherit",
+  shell: process.platform === "win32",
 });
 
 child.on("error", (error) => {
