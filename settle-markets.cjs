@@ -3,11 +3,41 @@ require("dotenv").config({ path: path.join(__dirname, ".env") });
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const hre = require("hardhat");
-const { Contract, JsonRpcProvider, Wallet } = require("ethers");
 const fs = require("fs");
 const viem = require("viem");
 const { SDK } = require("@somnia-chain/reactivity");
 const { loadMarkets, saveMarkets, loadSubscriptionId, saveSubscriptionId, clearSubscriptionId } = require("./lib/supabase-markets.cjs");
+const { incrementProtocolStats } = require("./lib/supabase-stats.cjs");
+const { Contract, JsonRpcProvider, Wallet, Interface } = require("ethers");
+
+const MARKET_SETTLED_IFACE = new Interface([
+  "event MarketSettled(bool boundWins, uint256 totalPool, uint256 winnings, uint256 resolvedPrice)",
+]);
+
+/**
+ * @returns {{ totalPool: bigint, winnings: bigint } | null}
+ * @param {import("ethers").TransactionReceipt} receipt
+ */
+function parseMarketSettled(receipt, marketAddressLower) {
+  const target = marketAddressLower.toLowerCase();
+  for (const log of receipt.logs) {
+    if (!log.address || log.address.toLowerCase() !== target) continue;
+    try {
+      const parsed = MARKET_SETTLED_IFACE.parseLog({ topics: log.topics, data: log.data });
+      if (parsed?.name === "MarketSettled") {
+        const tp = parsed.args.totalPool;
+        const w = parsed.args.winnings;
+        return {
+          totalPool: typeof tp === "bigint" ? tp : BigInt(tp.toString()),
+          winnings: typeof w === "bigint" ? w : BigInt(w.toString()),
+        };
+      }
+    } catch {
+      /* not this event */
+    }
+  }
+  return null;
+}
 
 /**
  * Settlement Bot - Automatically settles expired markets
@@ -139,8 +169,9 @@ async function main() {
   // Get market contract ABI
   const marketABI = [
     "function marketConfig() external view returns (string name, string feedName, uint256 lowerBound, uint256 upperBound, uint256 expiryTimestamp, uint256 creationTimestamp, uint256 startPrice, bool initialized, bool settled)",
+    "function bootstrapAmount() external view returns (uint256)",
     "function settle() external",
-    "event MarketSettled(bool boundWins, uint256 totalPool, uint256 winnings, uint256 resolvedPrice)"
+    "event MarketSettled(bool boundWins, uint256 totalPool, uint256 winnings, uint256 resolvedPrice)",
   ];
 
   console.log(`🔗 Settlement RPC: ${settlementRpcUrl}`);
@@ -352,8 +383,26 @@ async function main() {
           // settle() now takes no parameters - contract fetches price from oracle
           tx = await marketContract.settle();
           console.log(`   Transaction: ${tx.hash}`);
-          await tx.wait();
+          const receipt = await tx.wait();
           console.log(`   ✅ Settled using on-chain oracle!\n`);
+
+          const settledArgs = parseMarketSettled(receipt, marketAddrLower);
+          if (settledArgs != null) {
+            const bootstrapBn = BigInt((await marketContract.bootstrapAmount()).toString());
+            const traderPool = settledArgs.totalPool - bootstrapBn;
+            const feeRaw = traderPool - settledArgs.winnings;
+            if (feeRaw < 0n) {
+              console.warn(
+                "   ⚠️  protocol_stats skip: traderPool < winnings (unexpected); check receipt manually"
+              );
+            } else {
+              await incrementProtocolStats(network, traderPool, feeRaw);
+            }
+          } else {
+            console.warn(
+              "   ⚠️  No MarketSettled log in receipt; protocol_stats not updated (settlement still succeeded)"
+            );
+          }
         } catch (txError) {
           // Re-throw with more context
           throw new Error(`Settlement transaction failed: ${txError.message}`);
